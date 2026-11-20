@@ -158,24 +158,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (error) {
-        // If email confirmation is required by Supabase project settings, bypass it automatically
-        if (error.message.toLowerCase().includes("email not confirmed")) {
-          setUser({
-            id: `user-${Date.now()}`,
-            email,
-            displayName: email.split("@")[0],
-            role: "Pharmacist Admin",
-            pharmacyName: "HealthPlus Meds & Wellness",
-            licenseNumber: "DL-REGISTERED",
-            isDemo: false,
-          });
-          if (typeof document !== "undefined") {
-            document.cookie = "apexcare_demo_session=active; path=/; max-age=604800";
-          }
-          setIsLoading(false);
-          return { success: true };
-        }
-
         setIsLoading(false);
         return { success: false, error: error.message };
       }
@@ -246,24 +228,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (error) {
-        // If email confirmation is required by Supabase project settings, bypass it automatically
-        if (error.message.toLowerCase().includes("email not confirmed")) {
-          setUser({
-            id: `user-${Date.now()}`,
-            email,
-            displayName: email.split("@")[0],
-            role: "Pharmacist Admin",
-            pharmacyName: "HealthPlus Meds & Wellness",
-            licenseNumber: "DL-REGISTERED",
-            isDemo: false,
-          });
-          if (typeof document !== "undefined") {
-            document.cookie = "apexcare_demo_session=active; path=/; max-age=604800";
-          }
-          setIsLoading(false);
-          return { success: true };
-        }
-
         setIsLoading(false);
         return { success: false, error: error.message };
       }
