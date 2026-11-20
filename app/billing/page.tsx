@@ -44,7 +44,7 @@ export default function BillingPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
 
   // Customer & Bill options
-  const [customerName, setCustomerName] = useState("Walk-in Patient");
+  const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("UPI");
   const [discountPercent, setDiscountPercent] = useState<number>(0);
@@ -93,13 +93,13 @@ export default function BillingPage() {
     );
   }, [cart, discountPercent, settings.defaultTaxPercent]);
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (cart.length === 0) return;
     setCheckoutError(null);
     setIsProcessing(true);
 
-    setTimeout(() => {
-      const res = checkoutCart({
+    try {
+      const res = await checkoutCart({
         customerName: customerName.trim() || "Walk-in Customer",
         customerPhone: customerPhone.trim() || undefined,
         paymentMethod,
@@ -119,7 +119,10 @@ export default function BillingPage() {
       } else {
         setCheckoutError(res.error || "Unable to process invoice. Check available stock.");
       }
-    }, 400);
+    } catch (err: any) {
+      setIsProcessing(false);
+      setCheckoutError(err.message || "Failed to process transaction.");
+    }
   };
 
   const handlePrint = () => {

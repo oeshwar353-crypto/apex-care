@@ -124,17 +124,9 @@ export default function AnalyticsPage() {
       }
     });
 
-    const list = Array.from(map.values());
-    if (list.length < 5) {
-      return [
-        { name: "Dolo 650 Tablet", category: "Analgesics & Pain", units: 142, revenue: 4544 },
-        { name: "Pan 40 Tablet", category: "Gastrointestinal", units: 94, revenue: 14570 },
-        { name: "Glycomet 500 SR", category: "Antidiabetics", units: 88, revenue: 3740 },
-        { name: "Augmentin 625 Duo", category: "Antibiotics", units: 68, revenue: 13702 },
-        { name: "Montair LC", category: "Respiratory", units: 52, revenue: 11960 },
-      ];
-    }
-    return list.sort((a, b) => b.units - a.units).slice(0, 6);
+    return Array.from(map.values())
+      .sort((a, b) => b.units - a.units)
+      .slice(0, 6);
   }, [invoices]);
 
   // Summary Metrics

@@ -1,25 +1,55 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Pill, Eye, EyeOff, ShieldCheck, ArrowRight, AlertCircle, Info } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Pill,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  ArrowRight,
+  AlertCircle,
+  CheckCircle2,
+  Database,
+  CloudLightning,
+} from "lucide-react";
 import { validateLoginForm } from "@/lib/validation";
+import { useAuth } from "@/lib/auth-context";
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter();
-  const [emailOrStoreId, setEmailOrStoreId] = useState("store@apexcarepharmacy.demo");
-  const [password, setPassword] = useState("apexcare2026");
+  const searchParams = useSearchParams();
+  const { signIn, signInDemo, resetPassword, isConfigured } = useAuth();
+
+  const [emailOrStoreId, setEmailOrStoreId] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
+  const [rememberMe, setRememberMe] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [successNotice, setSuccessNotice] = useState<string | null>(null);
+
   const [forgotModal, setForgotModal] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
   const [resetFeedback, setResetFeedback] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (searchParams.get("registered") === "true") {
+      setSuccessNotice("Registration successful! Sign in with your new pharmacy credentials.");
+    }
+    const err = searchParams.get("error");
+    if (err) {
+      setAuthError(decodeURIComponent(err));
+    }
+  }, [searchParams]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAuthError(null);
+
     const result = validateLoginForm({ emailOrStoreId, password });
     if (!result.isValid) {
       setErrors(result.errors);
@@ -28,31 +58,47 @@ export default function LoginPage() {
     setErrors({});
     setIsLoading(true);
 
-    // Simulate authentication delay
-    setTimeout(() => {
+    try {
+      const res = await signIn(emailOrStoreId, password);
+      if (res.success) {
+        const redirectPath = searchParams.get("redirect") || "/dashboard";
+        router.push(redirectPath);
+      } else {
+        setAuthError(res.error || "Authentication failed. Please verify your credentials.");
+      }
+    } catch (err: any) {
+      setAuthError(err.message || "Failed to sign in. Please try again.");
+    } finally {
       setIsLoading(false);
-      router.push("/dashboard");
-    }, 700);
+    }
   };
 
   const handleDemoBypass = () => {
-    setEmailOrStoreId("store@apexcarepharmacy.demo");
-    setPassword("apexcare2026");
     setIsLoading(true);
+    signInDemo();
     setTimeout(() => {
       setIsLoading(false);
       router.push("/dashboard");
-    }, 400);
+    }, 300);
   };
 
-  const handleSendReset = (e: React.FormEvent) => {
+  const handleSendReset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetEmail) return;
-    setResetFeedback(`Password reset instructions have been dispatched to ${resetEmail} (Simulated).`);
-    setTimeout(() => {
-      setForgotModal(false);
-      setResetFeedback(null);
-    }, 2200);
+    setIsResetting(true);
+
+    const res = await resetPassword(resetEmail);
+    setIsResetting(false);
+
+    if (res.success) {
+      setResetFeedback(res.message || "Password recovery email dispatched successfully.");
+      setTimeout(() => {
+        setForgotModal(false);
+        setResetFeedback(null);
+      }, 2500);
+    } else {
+      setResetFeedback(res.error || "Failed to send reset link.");
+    }
   };
 
   return (
@@ -66,9 +112,10 @@ export default function LoginPage() {
             &larr; Back to Home Page
           </Link>
         </div>
+
         {/* Software Branding Header */}
         <div className="mb-6 text-center">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-lg bg-[#0F766E] text-white">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-lg bg-[#0F766E] text-white shadow-sm">
             <Pill className="h-6 w-6" />
           </div>
           <h1 className="mt-3 text-xl font-bold tracking-tight text-[#1F2937]">
@@ -79,21 +126,53 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Demo Mode Notice Banner */}
-        <div className="mb-4 rounded-md border border-[#CCFBF1] bg-[#F0FDFA] p-3 text-xs text-[#0F766E]">
+        {/* Supabase Connection Status Banner */}
+        <div
+          className={`mb-4 rounded-md border p-3 text-xs ${isConfigured
+            ? "border-[#BBF7D0] bg-[#F0FDF4] text-[#15803D]"
+            : "border-[#CCFBF1] bg-[#F0FDFA] text-[#0F766E]"
+            }`}
+        >
           <div className="flex items-start gap-2">
-            <Info className="h-4 w-4 shrink-0 mt-0.5" />
+            {isConfigured ? (
+              <CloudLightning className="h-4 w-4 shrink-0 mt-0.5 text-[#15803D]" />
+            ) : (
+              <Database className="h-4 w-4 shrink-0 mt-0.5 text-[#0F766E]" />
+            )}
             <div>
-              <span className="font-semibold">Interactive Demo Mode:</span> Use the pre-filled credentials below or click the 1-click Demo Login button to access the full system.
+              {isConfigured ? (
+                <div>
+                  <span className="font-semibold">Supabase Auth Connected:</span> Live Supabase authentication active. Sign in with your registered account or use Demo Mode.
+                </div>
+              ) : (
+                <div>
+                  <span className="font-semibold">Supabase Auth Ready:</span> Add your <code className="rounded bg-teal-100/70 px-1 py-0.5 font-mono text-[11px]">NEXT_PUBLIC_SUPABASE_URL</code> in <code className="rounded bg-teal-100/70 px-1 py-0.5 font-mono text-[11px]">.env.local</code> to link your live Supabase database. You can also sign in right now via 1-click Demo Mode.
+                </div>
+              )}
             </div>
           </div>
         </div>
+
+        {/* Global Feedback Notices */}
+        {authError && (
+          <div className="mb-4 flex items-center gap-2 rounded-md border border-[#FECACA] bg-[#FEF2F2] p-3 text-xs text-[#B91C1C]">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{authError}</span>
+          </div>
+        )}
+
+        {successNotice && (
+          <div className="mb-4 flex items-center gap-2 rounded-md border border-[#BBF7D0] bg-[#F0FDF4] p-3 text-xs text-[#15803D]">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{successNotice}</span>
+          </div>
+        )}
 
         {/* Login Card */}
         <div className="rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-6 shadow-sm">
           <div className="mb-5 border-b border-[#E2E8F0] pb-3">
             <h2 className="text-sm font-bold text-[#1F2937]">Sign in to your Pharmacy Terminal</h2>
-            <p className="text-xs text-[#64748B]">Enter your store credentials or pharmacist ID</p>
+            <p className="text-xs text-[#64748B]">Enter your registered email and pharmacist password</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -106,10 +185,9 @@ export default function LoginPage() {
                 type="text"
                 value={emailOrStoreId}
                 onChange={(e) => setEmailOrStoreId(e.target.value)}
-                placeholder="e.g. store@apexcarepharmacy.demo or STR-401"
-                className={`w-full rounded border px-3 py-2 text-xs text-[#1F2937] placeholder-[#94A3B8] outline-none transition-colors focus:border-[#0F766E] ${
-                  errors.emailOrStoreId ? "border-[#B91C1C]" : "border-[#E2E8F0]"
-                }`}
+                placeholder="store@apexcarepharmacy.demo or user@gmail.com"
+                className={`w-full rounded border px-3 py-2 text-xs text-[#1F2937] placeholder-[#94A3B8] outline-none transition-colors focus:border-[#0F766E] ${errors.emailOrStoreId ? "border-[#B91C1C]" : "border-[#E2E8F0]"
+                  }`}
               />
               {errors.emailOrStoreId && (
                 <p className="mt-1 flex items-center gap-1 text-[11px] text-[#B91C1C]">
@@ -139,9 +217,8 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className={`w-full rounded border px-3 py-2 pr-9 text-xs text-[#1F2937] placeholder-[#94A3B8] outline-none transition-colors focus:border-[#0F766E] ${
-                    errors.password ? "border-[#B91C1C]" : "border-[#E2E8F0]"
-                  }`}
+                  className={`w-full rounded border px-3 py-2 pr-9 text-xs text-[#1F2937] placeholder-[#94A3B8] outline-none transition-colors focus:border-[#0F766E] ${errors.password ? "border-[#B91C1C]" : "border-[#E2E8F0]"
+                    }`}
                 />
                 <button
                   type="button"
@@ -184,7 +261,7 @@ export default function LoginPage() {
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
               ) : (
                 <>
-                  <span>Sign In to Pharmacy Terminal</span>
+                  <span>Sign In with Supabase</span>
                   <ArrowRight className="h-3.5 w-3.5" />
                 </>
               )}
@@ -216,17 +293,17 @@ export default function LoginPage() {
 
         {/* Footer info */}
         <p className="mt-4 text-center text-[11px] text-[#94A3B8]">
-          ApexCare Rx v2.4 • Client-side Demonstration • Currency: INR (₹)
+          ApexCare Rx v2.4 • Supabase Auth Integrated • Currency: INR (₹)
         </p>
       </div>
 
-      {/* Forgot Password Simulated Modal */}
+      {/* Forgot Password Modal */}
       {forgotModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-lg">
             <h3 className="text-sm font-bold text-[#1F2937]">Reset Pharmacist Credentials</h3>
             <p className="mt-1 text-xs text-[#64748B]">
-              Enter your registered pharmacy email address to receive recovery verification details.
+              Enter your registered pharmacy email address to receive password recovery instructions via Supabase.
             </p>
 
             {resetFeedback ? (
@@ -253,9 +330,10 @@ export default function LoginPage() {
                   </button>
                   <button
                     type="submit"
-                    className="rounded bg-[#0F766E] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#115E59]"
+                    disabled={isResetting}
+                    className="rounded bg-[#0F766E] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#115E59] disabled:opacity-60"
                   >
-                    Send Instructions
+                    {isResetting ? "Sending..." : "Send Instructions"}
                   </button>
                 </div>
               </form>
@@ -264,5 +342,19 @@ export default function LoginPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-[#F8FAFC]">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#0F766E] border-t-transparent" />
+        </div>
+      }
+    >
+      <LoginContent />
+    </Suspense>
   );
 }

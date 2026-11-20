@@ -13,17 +13,21 @@ import {
   CheckCircle2,
   AlertTriangle,
   Info,
-  Moon,
   Sun,
   ShieldCheck,
+  CloudLightning,
+  Database,
+  KeyRound,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
 import { usePharmacy } from "@/lib/pharmacy-context";
+import { useAuth } from "@/lib/auth-context";
 import { PharmacyProfile, UserSettings } from "@/lib/types";
 
 export default function SettingsPage() {
   const router = useRouter();
   const { profile, settings, updateProfile, updateSettings, resetToDemoData } = usePharmacy();
+  const { user, signOut, isConfigured } = useAuth();
 
   // Local form state
   const [profileForm, setProfileForm] = useState<PharmacyProfile>({ ...profile });
@@ -52,6 +56,11 @@ export default function SettingsPage() {
     }, 700);
   };
 
+  const handleSignOut = async () => {
+    await signOut();
+    router.push("/login");
+  };
+
   return (
     <AppShell pageTitle="Pharmacy Configuration & Store Settings">
       <div className="max-w-4xl space-y-6">
@@ -61,6 +70,70 @@ export default function SettingsPage() {
             <span>{savedFeedback}</span>
           </div>
         )}
+
+        {/* Section 0: Supabase Authentication Status */}
+        <div className="rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-sm">
+          <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3 mb-4">
+            <div className="flex items-center gap-2">
+              {isConfigured ? (
+                <CloudLightning className="h-5 w-5 text-[#15803D]" />
+              ) : (
+                <Database className="h-5 w-5 text-[#0F766E]" />
+              )}
+              <div>
+                <h3 className="text-xs font-bold text-[#1F2937]">Supabase Cloud Authentication</h3>
+                <p className="text-[11px] text-[#64748B]">Cloud session state and user identity status</p>
+              </div>
+            </div>
+            <div>
+              {isConfigured && user && !user.isDemo ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#F0FDF4] border border-[#BBF7D0] px-2.5 py-1 text-xs font-semibold text-[#15803D]">
+                  <span className="h-2 w-2 rounded-full bg-[#15803D] animate-pulse"></span>
+                  Connected to Supabase
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#FEF3C7] border border-[#FDE68A] px-2.5 py-1 text-xs font-semibold text-[#B45309]">
+                  <span className="h-2 w-2 rounded-full bg-[#D97706]"></span>
+                  Demo Session Active
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+              <span className="text-[11px] font-medium text-[#64748B]">Current Authenticated User</span>
+              <p className="mt-1 font-semibold text-[#1F2937] text-sm">{user?.displayName || "Pharmacist"}</p>
+              <p className="text-[11px] text-[#64748B]">{user?.email || "No email"}</p>
+            </div>
+
+            <div className="rounded-md border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+              <span className="text-[11px] font-medium text-[#64748B]">Auth Provider & User ID</span>
+              <p className="mt-1 font-semibold text-[#1F2937]">
+                {user?.isDemo ? "Local Demo Terminal" : "Supabase Auth (Cloud)"}
+              </p>
+              <p className="text-[11px] font-mono text-[#64748B] truncate">
+                ID: {user?.id || "N/A"}
+              </p>
+            </div>
+          </div>
+
+          {!isConfigured && (
+            <div className="mt-4 rounded-md border border-[#CCFBF1] bg-[#F0FDFA] p-3 text-xs text-[#0F766E]">
+              <div className="flex items-start gap-2">
+                <Info className="h-4 w-4 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold">How to connect your live Supabase database:</span>
+                  <p className="mt-1 text-[11px] text-[#0F766E]/90 leading-relaxed">
+                    1. Create a free project at <span className="font-semibold">supabase.com</span><br />
+                    2. Go to <span className="font-semibold">Project Settings &gt; API</span> and copy your Project URL &amp; anon public key<br />
+                    3. Add them in <code className="font-mono bg-white/70 px-1 py-0.5 rounded border border-teal-200">.env.local</code> as <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and <code className="font-mono">NEXT_PUBLIC_SUPABASE_ANON_KEY</code>
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         <form onSubmit={handleSaveAll} className="space-y-6">
           {/* Section 1: Pharmacy Profile */}
@@ -189,7 +262,7 @@ export default function SettingsPage() {
               <Sliders className="h-4 w-4 text-[#0F766E]" />
               <div>
                 <h3 className="text-xs font-bold text-[#1F2937]">User Preferences & Billing Rules</h3>
-                <p className="text-[11px] text-[#64748B]">Terminal settings and demo tax assumptions</p>
+                <p className="text-[11px] text-[#64748B]">Terminal settings and tax assumptions</p>
               </div>
             </div>
 
@@ -233,7 +306,7 @@ export default function SettingsPage() {
                   <span className="text-xs text-[#64748B] whitespace-nowrap">% rate</span>
                 </div>
                 <span className="text-[10px] text-[#64748B]">
-                  Configurable demo rule applied automatically on POS checkout
+                  Applied automatically on POS checkout
                 </span>
               </div>
 
@@ -327,7 +400,7 @@ export default function SettingsPage() {
         {/* Section 4: Demo Session & Data Management */}
         <div className="rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-sm">
           <div className="border-b border-[#E2E8F0] pb-3 mb-4">
-            <h3 className="text-xs font-bold text-[#1F2937]">Demo Store Management & Terminal Session</h3>
+            <h3 className="text-xs font-bold text-[#1F2937]">Terminal Session & Reset Management</h3>
             <p className="text-[11px] text-[#64748B]">Manage client browser state and terminal access</p>
           </div>
 
@@ -352,12 +425,12 @@ export default function SettingsPage() {
             <div>
               <div className="font-semibold text-[#1F2937]">Sign Out from Pharmacy Terminal</div>
               <div className="text-[11px] text-[#64748B]">
-                End active session and return to the login credentials prompt
+                End active session and return to the login prompt
               </div>
             </div>
             <button
               type="button"
-              onClick={() => router.push("/login")}
+              onClick={handleSignOut}
               className="flex items-center gap-1.5 rounded border border-[#E2E8F0] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#B91C1C] hover:bg-[#FEE2E2]"
             >
               <LogOut className="h-3.5 w-3.5" />

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, useMemo } from "react";
+import React, { createContext, useContext, useEffect, useState, useMemo, useRef } from "react";
 import {
   BatchItem,
   CartItem,
@@ -17,19 +17,22 @@ import {
   initialUserSettings,
 } from "./mock-data";
 import { calculateBilling, generateInvoiceNumber, getExpiryStatus, getStockStatus } from "./calculations";
+import { createClient, isSupabaseConfigured } from "./supabase/client";
+import { useAuth } from "./auth-context";
 
 interface PharmacyContextType {
   isInitialized: boolean;
+  isRealtimeConnected: boolean;
   batches: BatchItem[];
   invoices: Invoice[];
   profile: PharmacyProfile;
   settings: UserSettings;
   cart: CartItem[];
   // Inventory actions
-  addBatch: (batch: Omit<BatchItem, "id" | "createdAt">) => void;
-  updateBatch: (id: string, updates: Partial<BatchItem>) => void;
-  deleteBatch: (id: string) => void;
-  adjustStock: (id: string, deltaQuantity: number, reason?: string) => void;
+  addBatch: (batch: Omit<BatchItem, "id" | "createdAt">) => Promise<void>;
+  updateBatch: (id: string, updates: Partial<BatchItem>) => Promise<void>;
+  deleteBatch: (id: string) => Promise<void>;
+  adjustStock: (id: string, deltaQuantity: number, reason?: string) => Promise<void>;
   // Billing / Cart actions
   addToCart: (batch: BatchItem, quantity?: number) => boolean;
   updateCartQuantity: (batchId: string, quantity: number) => void;
@@ -41,11 +44,11 @@ interface PharmacyContextType {
     paymentMethod: "Cash" | "UPI" | "Card";
     discountPercent?: number;
     notes?: string;
-  }) => { success: boolean; invoice?: Invoice; error?: string };
+  }) => Promise<{ success: boolean; invoice?: Invoice; error?: string }>;
   // Invoices
-  refundInvoice: (invoiceId: string) => void;
+  refundInvoice: (invoiceId: string) => Promise<void>;
   // Settings & Profile
-  updateProfile: (profile: Partial<PharmacyProfile>) => void;
+  updateProfile: (profile: Partial<PharmacyProfile>) => Promise<void>;
   updateSettings: (settings: Partial<UserSettings>) => void;
   resetToDemoData: () => void;
   // Aggregated helpers
@@ -66,53 +69,216 @@ interface PharmacyContextType {
 const PharmacyContext = createContext<PharmacyContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
-  BATCHES: "pharmacy_batches_v1",
-  INVOICES: "pharmacy_invoices_v1",
-  PROFILE: "pharmacy_profile_v1",
-  SETTINGS: "pharmacy_settings_v1",
-  CART: "pharmacy_cart_v1",
+  BATCHES: "pharmacy_batches_v2",
+  INVOICES: "pharmacy_invoices_v2",
+  PROFILE: "pharmacy_profile_v2",
+  SETTINGS: "pharmacy_settings_v2",
+  CART: "pharmacy_cart_v2",
 };
 
+// Database mappers
+function mapBatchFromDb(row: any): BatchItem {
+  return {
+    id: row.id,
+    medicineId: row.medicine_id,
+    medicineName: row.medicine_name,
+    genericName: row.generic_name || "",
+    category: row.category || "Analgesics & Pain",
+    manufacturer: row.manufacturer || "",
+    batchNumber: row.batch_number,
+    quantity: Number(row.quantity) || 0,
+    purchasePrice: Number(row.purchase_price) || 0,
+    sellingPrice: Number(row.selling_price) || 0,
+    expiryDate: row.expiry_date,
+    reorderThreshold: Number(row.reorder_threshold) || 10,
+    createdAt: row.created_at ? row.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+  };
+}
+
+function mapInvoiceFromDb(row: any): Invoice {
+  return {
+    id: row.id,
+    invoiceNumber: row.invoice_number,
+    date: row.date,
+    customerName: row.customer_name,
+    customerPhone: row.customer_phone || undefined,
+    items: typeof row.items === "string" ? JSON.parse(row.items) : row.items || [],
+    subtotal: Number(row.subtotal) || 0,
+    discountPercent: Number(row.discount_percent) || 0,
+    discountAmount: Number(row.discount_amount) || 0,
+    taxPercent: Number(row.tax_percent) || 0,
+    taxAmount: Number(row.tax_amount) || 0,
+    totalAmount: Number(row.total_amount) || 0,
+    paymentMethod: row.payment_method || "Cash",
+    paymentStatus: row.payment_status || "Completed",
+    cashierName: row.cashier_name || "Pharmacist",
+    notes: row.notes || undefined,
+  };
+}
+
 export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { supabaseUser, user } = useAuth();
   const [isInitialized, setIsInitialized] = useState(false);
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
+
   const [batches, setBatches] = useState<BatchItem[]>(initialBatches);
   const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
   const [profile, setProfile] = useState<PharmacyProfile>(initialPharmacyProfile);
   const [settings, setSettings] = useState<UserSettings>(initialUserSettings);
   const [cart, setCart] = useState<CartItem[]>([]);
 
-  // Load from localStorage on client mount
+  const supabaseRef = useRef(createClient());
+  const userIdRef = useRef<string | null>(null);
+
+  // Sync ref with current auth state
+  userIdRef.current = supabaseUser?.id || null;
+
+  // 1. Initial Data Loading & Realtime Subscription
   useEffect(() => {
-    try {
-      const storedBatches = localStorage.getItem(STORAGE_KEYS.BATCHES);
-      const storedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
-      const storedProfile = localStorage.getItem(STORAGE_KEYS.PROFILE);
-      const storedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      const storedCart = localStorage.getItem(STORAGE_KEYS.CART);
+    let channel: any = null;
+    const supabase = supabaseRef.current;
+    const isConfigured = isSupabaseConfigured();
 
-      if (storedBatches) {
-        setBatches(JSON.parse(storedBatches));
+    async function loadData() {
+      if (isConfigured && supabase && supabaseUser?.id) {
+        try {
+          const uid = supabaseUser.id;
+
+          // A. Fetch profile
+          const { data: dbProfile } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", uid)
+            .maybeSingle();
+
+          if (dbProfile) {
+            setProfile({
+              name: dbProfile.pharmacy_name || initialPharmacyProfile.name,
+              ownerName: dbProfile.owner_name || initialPharmacyProfile.ownerName,
+              email: dbProfile.email || supabaseUser.email || initialPharmacyProfile.email,
+              phone: dbProfile.phone || initialPharmacyProfile.phone,
+              licenseNumber: dbProfile.license_number || initialPharmacyProfile.licenseNumber,
+              address: dbProfile.address || initialPharmacyProfile.address,
+              city: dbProfile.city || initialPharmacyProfile.city,
+              pharmacyType: (dbProfile.pharmacy_type as any) || initialPharmacyProfile.pharmacyType,
+              storeSize: (dbProfile.store_size as any) || initialPharmacyProfile.storeSize,
+            });
+          }
+
+          // B. Fetch batches
+          const { data: dbBatches } = await supabase
+            .from("inventory_batches")
+            .select("*")
+            .eq("user_id", uid)
+            .order("created_at", { ascending: false });
+
+          if (dbBatches && dbBatches.length > 0) {
+            setBatches(dbBatches.map(mapBatchFromDb));
+          } else {
+            // Fresh account with no batches saved yet in Supabase
+            // Use initial clean starting batch
+            setBatches(initialBatches);
+          }
+
+          // C. Fetch invoices
+          const { data: dbInvoices } = await supabase
+            .from("invoices")
+            .select("*")
+            .eq("user_id", uid)
+            .order("date", { ascending: false });
+
+          if (dbInvoices) {
+            setInvoices(dbInvoices.map(mapInvoiceFromDb));
+          }
+
+          // D. Setup Supabase Realtime Channel
+          channel = supabase
+            .channel(`realtime-pharmacy-${uid}`)
+            .on(
+              "postgres_changes",
+              { event: "*", schema: "public", table: "inventory_batches", filter: `user_id=eq.${uid}` },
+              (payload) => {
+                if (payload.eventType === "INSERT") {
+                  const item = mapBatchFromDb(payload.new);
+                  setBatches((prev) => [item, ...prev.filter((b) => b.id !== item.id)]);
+                } else if (payload.eventType === "UPDATE") {
+                  const updated = mapBatchFromDb(payload.new);
+                  setBatches((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
+                } else if (payload.eventType === "DELETE") {
+                  setBatches((prev) => prev.filter((b) => b.id !== (payload.old as any).id));
+                }
+              }
+            )
+            .on(
+              "postgres_changes",
+              { event: "*", schema: "public", table: "invoices", filter: `user_id=eq.${uid}` },
+              (payload) => {
+                if (payload.eventType === "INSERT") {
+                  const inv = mapInvoiceFromDb(payload.new);
+                  setInvoices((prev) => [inv, ...prev.filter((i) => i.id !== inv.id)]);
+                } else if (payload.eventType === "UPDATE") {
+                  const updated = mapInvoiceFromDb(payload.new);
+                  setInvoices((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
+                }
+              }
+            )
+            .on(
+              "postgres_changes",
+              { event: "UPDATE", schema: "public", table: "profiles", filter: `id=eq.${uid}` },
+              (payload) => {
+                const p = payload.new;
+                setProfile((prev) => ({
+                  ...prev,
+                  name: p.pharmacy_name || prev.name,
+                  ownerName: p.owner_name || prev.ownerName,
+                  email: p.email || prev.email,
+                  phone: p.phone || prev.phone,
+                  licenseNumber: p.license_number || prev.licenseNumber,
+                  address: p.address || prev.address,
+                  city: p.city || prev.city,
+                  pharmacyType: p.pharmacy_type || prev.pharmacyType,
+                  storeSize: p.store_size || prev.storeSize,
+                }));
+              }
+            )
+            .subscribe((status) => {
+              setIsRealtimeConnected(status === "SUBSCRIBED");
+            });
+        } catch (e) {
+          console.error("Error loading real-time data from Supabase:", e);
+        } finally {
+          setIsInitialized(true);
+        }
+      } else {
+        // Fallback for demo mode / offline storage
+        try {
+          const storedBatches = localStorage.getItem(STORAGE_KEYS.BATCHES);
+          const storedInvoices = localStorage.getItem(STORAGE_KEYS.INVOICES);
+          const storedProfile = localStorage.getItem(STORAGE_KEYS.PROFILE);
+          const storedSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+
+          if (storedBatches) setBatches(JSON.parse(storedBatches));
+          if (storedInvoices) setInvoices(JSON.parse(storedInvoices));
+          if (storedProfile) setProfile(JSON.parse(storedProfile));
+          if (storedSettings) setSettings(JSON.parse(storedSettings));
+        } catch (e) {
+          console.warn("Storage load error:", e);
+        } finally {
+          setIsInitialized(true);
+        }
       }
-      if (storedInvoices) {
-        setInvoices(JSON.parse(storedInvoices));
-      }
-      if (storedProfile) {
-        setProfile(JSON.parse(storedProfile));
-      }
-      if (storedSettings) {
-        setSettings(JSON.parse(storedSettings));
-      }
-      if (storedCart) {
-        setCart(JSON.parse(storedCart));
-      }
-    } catch (e) {
-      console.warn("Failed to read demo data from localStorage:", e);
-    } finally {
-      setIsInitialized(true);
     }
-  }, []);
 
-  // Save changes to localStorage
+    loadData();
+
+    return () => {
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [supabaseUser]);
+
+  // Persist demo state changes in localStorage
   useEffect(() => {
     if (!isInitialized) return;
     try {
@@ -121,13 +287,11 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(profile));
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
       localStorage.setItem(STORAGE_KEYS.CART, JSON.stringify(cart));
-    } catch (e) {
-      console.error("Failed to persist demo state:", e);
-    }
+    } catch {}
   }, [batches, invoices, profile, settings, cart, isInitialized]);
 
-  // Inventory CRUD
-  const addBatch = (batchData: Omit<BatchItem, "id" | "createdAt">) => {
+  // Inventory CRUD with Supabase Realtime persistence
+  const addBatch = async (batchData: Omit<BatchItem, "id" | "createdAt">) => {
     const newBatch: BatchItem = {
       ...batchData,
       id: `batch-${Date.now()}`,
@@ -137,10 +301,37 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       sellingPrice: Math.max(0, Number(batchData.sellingPrice) || 0),
       reorderThreshold: Math.max(0, Number(batchData.reorderThreshold) || 10),
     };
+
+    // Optimistic UI update
     setBatches((prev) => [newBatch, ...prev]);
+
+    // Persist to Supabase if authenticated
+    const supabase = supabaseRef.current;
+    const uid = userIdRef.current;
+    if (supabase && uid) {
+      try {
+        await supabase.from("inventory_batches").insert({
+          id: newBatch.id,
+          user_id: uid,
+          medicine_id: newBatch.medicineId,
+          medicine_name: newBatch.medicineName,
+          generic_name: newBatch.genericName,
+          category: newBatch.category,
+          manufacturer: newBatch.manufacturer,
+          batch_number: newBatch.batchNumber,
+          quantity: newBatch.quantity,
+          purchase_price: newBatch.purchasePrice,
+          selling_price: newBatch.sellingPrice,
+          expiry_date: newBatch.expiryDate,
+          reorder_threshold: newBatch.reorderThreshold,
+        });
+      } catch (err) {
+        console.error("Failed to insert batch into Supabase:", err);
+      }
+    }
   };
 
-  const updateBatch = (id: string, updates: Partial<BatchItem>) => {
+  const updateBatch = async (id: string, updates: Partial<BatchItem>) => {
     setBatches((prev) =>
       prev.map((b) => {
         if (b.id !== id) return b;
@@ -149,31 +340,74 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           ...updates,
           quantity: updates.quantity !== undefined ? Math.max(0, Number(updates.quantity)) : b.quantity,
           purchasePrice:
-            updates.purchasePrice !== undefined
-              ? Math.max(0, Number(updates.purchasePrice))
-              : b.purchasePrice,
+            updates.purchasePrice !== undefined ? Math.max(0, Number(updates.purchasePrice)) : b.purchasePrice,
           sellingPrice:
-            updates.sellingPrice !== undefined
-              ? Math.max(0, Number(updates.sellingPrice))
-              : b.sellingPrice,
+            updates.sellingPrice !== undefined ? Math.max(0, Number(updates.sellingPrice)) : b.sellingPrice,
         };
       })
     );
+
+    const supabase = supabaseRef.current;
+    const uid = userIdRef.current;
+    if (supabase && uid) {
+      const dbUpdates: any = {};
+      if (updates.medicineName) dbUpdates.medicine_name = updates.medicineName;
+      if (updates.genericName !== undefined) dbUpdates.generic_name = updates.genericName;
+      if (updates.category) dbUpdates.category = updates.category;
+      if (updates.manufacturer !== undefined) dbUpdates.manufacturer = updates.manufacturer;
+      if (updates.batchNumber) dbUpdates.batch_number = updates.batchNumber;
+      if (updates.quantity !== undefined) dbUpdates.quantity = Math.max(0, Number(updates.quantity));
+      if (updates.purchasePrice !== undefined) dbUpdates.purchase_price = Math.max(0, Number(updates.purchasePrice));
+      if (updates.sellingPrice !== undefined) dbUpdates.selling_price = Math.max(0, Number(updates.sellingPrice));
+      if (updates.expiryDate) dbUpdates.expiry_date = updates.expiryDate;
+      if (updates.reorderThreshold !== undefined) dbUpdates.reorder_threshold = Number(updates.reorderThreshold);
+
+      try {
+        await supabase.from("inventory_batches").update(dbUpdates).eq("id", id).eq("user_id", uid);
+      } catch (err) {
+        console.error("Failed to update batch in Supabase:", err);
+      }
+    }
   };
 
-  const deleteBatch = (id: string) => {
+  const deleteBatch = async (id: string) => {
     setBatches((prev) => prev.filter((b) => b.id !== id));
     setCart((prev) => prev.filter((item) => item.batchId !== id));
+
+    const supabase = supabaseRef.current;
+    const uid = userIdRef.current;
+    if (supabase && uid) {
+      try {
+        await supabase.from("inventory_batches").delete().eq("id", id).eq("user_id", uid);
+      } catch (err) {
+        console.error("Failed to delete batch from Supabase:", err);
+      }
+    }
   };
 
-  const adjustStock = (id: string, deltaQuantity: number) => {
+  const adjustStock = async (id: string, deltaQuantity: number) => {
+    let finalQty = 0;
     setBatches((prev) =>
       prev.map((b) => {
         if (b.id !== id) return b;
-        const newQty = Math.max(0, b.quantity + deltaQuantity);
-        return { ...b, quantity: newQty };
+        finalQty = Math.max(0, b.quantity + deltaQuantity);
+        return { ...b, quantity: finalQty };
       })
     );
+
+    const supabase = supabaseRef.current;
+    const uid = userIdRef.current;
+    if (supabase && uid) {
+      try {
+        await supabase
+          .from("inventory_batches")
+          .update({ quantity: finalQty })
+          .eq("id", id)
+          .eq("user_id", uid);
+      } catch (err) {
+        console.error("Failed to adjust stock in Supabase:", err);
+      }
+    }
   };
 
   // Cart & POS
@@ -244,7 +478,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setCart([]);
   };
 
-  const checkoutCart = (params: {
+  const checkoutCart = async (params: {
     customerName: string;
     customerPhone?: string;
     paymentMethod: "Cash" | "UPI" | "Card";
@@ -255,7 +489,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return { success: false, error: "Cart is empty" };
     }
 
-    // Verify stock availability for all items
+    // Verify stock availability
     for (const item of cart) {
       const b = batches.find((x) => x.id === item.batchId);
       if (!b || b.quantity < item.quantity) {
@@ -296,11 +530,11 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       totalAmount,
       paymentMethod: params.paymentMethod,
       paymentStatus: "Completed",
-      cashierName: settings.displayName,
+      cashierName: user?.displayName || settings.displayName,
       notes: params.notes,
     };
 
-    // Deduct stock atomic update
+    // Deduct stock locally
     setBatches((prev) =>
       prev.map((b) => {
         const soldItem = cart.find((c) => c.batchId === b.id);
@@ -320,10 +554,53 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // Clear cart
     setCart([]);
 
+    // Real-time synchronization to Supabase
+    const supabase = supabaseRef.current;
+    const uid = userIdRef.current;
+    if (supabase && uid) {
+      try {
+        // 1. Insert invoice
+        await supabase.from("invoices").insert({
+          id: newInvoice.id,
+          user_id: uid,
+          invoice_number: newInvoice.invoiceNumber,
+          date: newInvoice.date,
+          customer_name: newInvoice.customerName,
+          customer_phone: newInvoice.customerPhone,
+          items: newInvoice.items,
+          subtotal: newInvoice.subtotal,
+          discount_percent: newInvoice.discountPercent,
+          discount_amount: newInvoice.discountAmount,
+          tax_percent: newInvoice.taxPercent,
+          tax_amount: newInvoice.taxAmount,
+          total_amount: newInvoice.totalAmount,
+          payment_method: newInvoice.paymentMethod,
+          payment_status: newInvoice.paymentStatus,
+          cashier_name: newInvoice.cashierName,
+          notes: newInvoice.notes,
+        });
+
+        // 2. Decrement stock on Supabase for each sold item
+        for (const item of newInvoice.items) {
+          const currentBatch = batches.find((b) => b.id === item.batchId);
+          if (currentBatch) {
+            const nextQty = Math.max(0, currentBatch.quantity - item.quantity);
+            await supabase
+              .from("inventory_batches")
+              .update({ quantity: nextQty })
+              .eq("id", item.batchId)
+              .eq("user_id", uid);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to sync invoice to Supabase:", err);
+      }
+    }
+
     return { success: true, invoice: newInvoice };
   };
 
-  const refundInvoice = (invoiceId: string) => {
+  const refundInvoice = async (invoiceId: string) => {
     const inv = invoices.find((i) => i.id === invoiceId);
     if (!inv || inv.paymentStatus === "Refunded") return;
 
@@ -342,10 +619,60 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setInvoices((prev) =>
       prev.map((i) => (i.id === invoiceId ? { ...i, paymentStatus: "Refunded" } : i))
     );
+
+    // Sync refund to Supabase
+    const supabase = supabaseRef.current;
+    const uid = userIdRef.current;
+    if (supabase && uid) {
+      try {
+        await supabase
+          .from("invoices")
+          .update({ payment_status: "Refunded" })
+          .eq("id", invoiceId)
+          .eq("user_id", uid);
+
+        for (const item of inv.items) {
+          const currentBatch = batches.find((b) => b.id === item.batchId);
+          if (currentBatch) {
+            await supabase
+              .from("inventory_batches")
+              .update({ quantity: currentBatch.quantity + item.quantity })
+              .eq("id", item.batchId)
+              .eq("user_id", uid);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to refund invoice in Supabase:", err);
+      }
+    }
   };
 
-  const updateProfile = (newProfile: Partial<PharmacyProfile>) => {
+  const updateProfile = async (newProfile: Partial<PharmacyProfile>) => {
     setProfile((prev) => ({ ...prev, ...newProfile }));
+
+    const supabase = supabaseRef.current;
+    const uid = userIdRef.current;
+    if (supabase && uid) {
+      try {
+        await supabase
+          .from("profiles")
+          .upsert({
+            id: uid,
+            pharmacy_name: newProfile.name,
+            owner_name: newProfile.ownerName,
+            email: newProfile.email,
+            phone: newProfile.phone,
+            license_number: newProfile.licenseNumber,
+            address: newProfile.address,
+            city: newProfile.city,
+            pharmacy_type: newProfile.pharmacyType,
+            store_size: newProfile.storeSize,
+            updated_at: new Date().toISOString(),
+          });
+      } catch (err) {
+        console.error("Failed to update profile in Supabase:", err);
+      }
+    }
   };
 
   const updateSettings = (newSettings: Partial<UserSettings>) => {
@@ -403,7 +730,6 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Demand predictions
   const demandPredictions = useMemo<DemandPrediction[]>(() => {
-    // Count units sold in past invoices for each medicine name
     const salesMap = new Map<string, number>();
     invoices.forEach((inv) => {
       if (inv.paymentStatus === "Completed") {
@@ -415,14 +741,13 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
 
     return medicineSummaries.map((summary) => {
-      const unitsSold = (salesMap.get(summary.name.toLowerCase()) || 0) + 12; // baseline + actual sold
-      const leadTimeDays = 5; // standard supplier delivery
-      const dailyVelocity = unitsSold / 30;
-      const forecastDemandNext30Days = Math.round(dailyVelocity * 30);
+      const unitsSold = salesMap.get(summary.name.toLowerCase()) || 0;
+      const leadTimeDays = 5;
+      const dailyVelocity = unitsSold > 0 ? unitsSold / 30 : 0.5;
+      const forecastDemandNext30Days = Math.max(1, Math.round(dailyVelocity * 30));
       const leadTimeDemand = Math.round(dailyVelocity * leadTimeDays);
-      const safetyStock = Math.max(10, Math.round(dailyVelocity * 7)); // 7 days safety buffer
+      const safetyStock = Math.max(5, Math.round(dailyVelocity * 7));
 
-      // Formula: max(0, leadTimeDemand + safetyStock - currentStock)
       const rawSuggested = leadTimeDemand + safetyStock - summary.totalQuantity;
       const suggestedReorderQty = Math.max(0, rawSuggested);
 
@@ -431,19 +756,19 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       if (summary.totalQuantity === 0) {
         recommendationStatus = "Immediate Reorder";
-        rationale = "Product is completely out of stock with ongoing patient demand.";
-      } else if (suggestedReorderQty > 20) {
+        rationale = "Product is completely out of stock with active patient inquiries.";
+      } else if (suggestedReorderQty > 15) {
         recommendationStatus = "Immediate Reorder";
-        rationale = `Available stock (${summary.totalQuantity}) falls below lead time (${leadTimeDays}d) + safety requirement (${safetyStock}).`;
+        rationale = `Available stock (${summary.totalQuantity}) falls below lead time buffer (${safetyStock} safety).`;
       } else if (suggestedReorderQty > 0) {
         recommendationStatus = "Order Soon";
-        rationale = `Current velocity (${dailyVelocity.toFixed(1)}/day) projects depletion within ${Math.round(summary.totalQuantity / Math.max(0.1, dailyVelocity))} days.`;
+        rationale = `Current velocity (${dailyVelocity.toFixed(1)}/day) projects stock depletion in ${Math.round(summary.totalQuantity / Math.max(0.1, dailyVelocity))} days.`;
       } else if (summary.totalQuantity > (forecastDemandNext30Days * 2.5)) {
         recommendationStatus = "Overstocked";
-        rationale = `Current stock exceeds 2.5 months of projected demand; avoid placing replenishment orders.`;
+        rationale = "Current stock exceeds 2.5 months of projected demand; avoid replenishment orders.";
       } else {
         recommendationStatus = "Adequate Stock";
-        rationale = `Inventory levels are well-balanced for the projected 30-day run rate.`;
+        rationale = "Inventory levels are healthy for the projected 30-day run rate.";
       }
 
       const expiryRisk = summary.expiryStatus === "expired" ? "High" : summary.expiryStatus === "expiring-soon" ? "Medium" : "Low";
@@ -462,7 +787,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         expiryRisk,
         recommendationStatus,
         rationale,
-        confidence: unitsSold > 15 ? "High (Based on 30-day velocity)" : "Medium",
+        confidence: unitsSold > 5 ? "High (Based on 30-day velocity)" : "Medium",
       };
     });
   }, [medicineSummaries, invoices]);
@@ -502,6 +827,7 @@ export const PharmacyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     <PharmacyContext.Provider
       value={{
         isInitialized,
+        isRealtimeConnected,
         batches,
         invoices,
         profile,

@@ -23,74 +23,38 @@ export default function OnboardingPage() {
   const { profile, updateProfile, addBatch } = usePharmacy();
 
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Step 1 State: Profile
+  // Step 1 State: Profile (blank for new users)
   const [profileData, setProfileData] = useState<PharmacyProfile>({
-    name: profile.name || "Apex Care Pharmacy & Druggists",
-    ownerName: profile.ownerName || "Dr. Rajesh K. Sharma, B.Pharm",
-    email: profile.email || "store@apexcarepharmacy.demo",
-    phone: profile.phone || "+91 98201 54321",
-    licenseNumber: profile.licenseNumber || "MH-TZ-2024-88492X (Demo License)",
-    address: profile.address || "Shop No. 4, Ground Floor, Shanti Heights, Link Road",
-    city: profile.city || "Mumbai, Maharashtra 400053",
+    name: profile.name || "",
+    ownerName: profile.ownerName || "",
+    email: profile.email || "",
+    phone: profile.phone || "",
+    licenseNumber: profile.licenseNumber || "",
+    address: profile.address || "",
+    city: profile.city || "",
     pharmacyType: profile.pharmacyType || "standalone",
     storeSize: profile.storeSize || "medium",
   });
 
-  // Step 2 State: Medicines list
+  // Step 2 State: Initial Opening Inventory (starts empty)
   const [medicines, setMedicines] = useState<
     Omit<BatchItem, "id" | "createdAt" | "medicineId">[]
-  >([
-    {
-      medicineName: "Dolo 650 Tablet",
-      genericName: "Paracetamol 650mg",
-      category: "Analgesics & Pain" as MedicineCategory,
-      manufacturer: "Micro Labs Ltd",
-      batchNumber: "DL-2024-901",
-      quantity: 150,
-      purchasePrice: 24.5,
-      sellingPrice: 32.0,
-      expiryDate: "2027-08-31",
-      reorderThreshold: 30,
-    },
-    {
-      medicineName: "Augmentin 625 Duo",
-      genericName: "Amoxicillin 500mg + Clavulanic Acid 125mg",
-      category: "Antibiotics" as MedicineCategory,
-      manufacturer: "GSK",
-      batchNumber: "AUG-625-78",
-      quantity: 50,
-      purchasePrice: 145.0,
-      sellingPrice: 201.5,
-      expiryDate: "2027-05-30",
-      reorderThreshold: 15,
-    },
-    {
-      medicineName: "Pan 40 Tablet",
-      genericName: "Pantoprazole Gastro-Resistant 40mg",
-      category: "Gastrointestinal" as MedicineCategory,
-      manufacturer: "Alkem Laboratories",
-      batchNumber: "PAN-40-091",
-      quantity: 100,
-      purchasePrice: 95.0,
-      sellingPrice: 155.0,
-      expiryDate: "2027-12-31",
-      reorderThreshold: 25,
-    },
-  ]);
+  >([]);
 
-  // Form for adding a new medicine in Step 2
+  // Form for adding another medicine in Step 2
   const [newMed, setNewMed] = useState({
     medicineName: "",
     genericName: "",
-    category: "Antibiotics" as MedicineCategory,
+    category: "Analgesics & Pain" as MedicineCategory,
     manufacturer: "",
     batchNumber: "",
-    quantity: 50,
-    purchasePrice: 40,
-    sellingPrice: 65,
-    expiryDate: "2027-12-31",
-    reorderThreshold: 15,
+    quantity: 0,
+    purchasePrice: 0,
+    sellingPrice: 0,
+    expiryDate: "",
+    reorderThreshold: 10,
   });
   const [newMedError, setNewMedError] = useState("");
 
@@ -129,19 +93,28 @@ export default function OnboardingPage() {
     setMedicines(medicines.filter((_, i) => i !== index));
   };
 
-  const handleCompleteOnboarding = () => {
-    // Save profile
-    updateProfile(profileData);
+  const handleCompleteOnboarding = async () => {
+    setIsSaving(true);
+    try {
+      // 1. Save profile to Supabase & local state
+      await updateProfile(profileData);
 
-    // Save initial medicines
-    medicines.forEach((m, idx) => {
-      addBatch({
-        ...m,
-        medicineId: `med-onboard-${idx + 1}`,
-      });
-    });
+      // 2. Save real initial medicines to Supabase & local state
+      for (let idx = 0; idx < medicines.length; idx++) {
+        const m = medicines[idx];
+        await addBatch({
+          ...m,
+          medicineId: `med-onboard-${idx + 1}`,
+        });
+      }
 
-    router.push("/dashboard");
+      router.push("/dashboard");
+    } catch (e) {
+      console.error("Error saving onboarding details:", e);
+      router.push("/dashboard");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const categories: MedicineCategory[] = [
@@ -163,7 +136,7 @@ export default function OnboardingPage() {
         {/* Header */}
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-[#E2E8F0] pb-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#0F766E] text-white">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#0F766E] text-white shadow-sm">
               <Pill className="h-5 w-5" />
             </div>
             <div>
@@ -273,7 +246,6 @@ export default function OnboardingPage() {
                   onChange={(e) => setProfileData({ ...profileData, licenseNumber: e.target.value })}
                   className="w-full rounded border border-[#E2E8F0] px-3 py-2 text-[#1F2937] outline-none focus:border-[#0F766E]"
                 />
-                <span className="text-[10px] text-[#64748B]">Treated as unverified demonstration license</span>
               </div>
 
               <div>
@@ -348,7 +320,6 @@ export default function OnboardingPage() {
         {/* Step 2: Initial Inventory */}
         {currentStep === 2 && (
           <div className="space-y-6">
-            {/* Quick add card */}
             <div className="rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-sm">
               <div className="mb-4 border-b border-[#E2E8F0] pb-2">
                 <h2 className="text-sm font-bold text-[#1F2937]">Step 2: Enter Starting Medicines</h2>
@@ -478,7 +449,7 @@ export default function OnboardingPage() {
               </form>
             </div>
 
-            {/* List of medicines added so far */}
+            {/* List of configured stock */}
             <div className="rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-sm">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-xs font-bold text-[#1F2937]">
@@ -489,7 +460,7 @@ export default function OnboardingPage() {
 
               {medicines.length === 0 ? (
                 <div className="p-6 text-center text-xs text-[#64748B]">
-                  No medicines added yet. Use the form above to add your first medicine.
+                  No medicines added yet. Use the form above to add your opening inventory.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -535,7 +506,6 @@ export default function OnboardingPage() {
                 </div>
               )}
 
-              {/* Navigation buttons */}
               <div className="mt-6 flex justify-between border-t border-[#E2E8F0] pt-4">
                 <button
                   type="button"
@@ -650,16 +620,6 @@ export default function OnboardingPage() {
               </div>
             </div>
 
-            {/* Demonstration Notice */}
-            <div className="mb-6 rounded border border-[#E2E8F0] bg-[#F8FAFC] p-3 text-xs text-[#64748B]">
-              <div className="flex items-center gap-2">
-                <Info className="h-4 w-4 text-[#0F766E] shrink-0" />
-                <span>
-                  All initial inventory and store profile parameters will be synchronized directly into local application memory. You can add more stock or adjust anytime from the Inventory terminal.
-                </span>
-              </div>
-            </div>
-
             {/* Actions */}
             <div className="flex justify-between border-t border-[#E2E8F0] pt-4">
               <button
@@ -672,11 +632,18 @@ export default function OnboardingPage() {
               </button>
               <button
                 type="button"
+                disabled={isSaving}
                 onClick={handleCompleteOnboarding}
-                className="flex items-center gap-2 rounded bg-[#0F766E] px-5 py-2 text-xs font-bold text-white shadow-sm hover:bg-[#115E59]"
+                className="flex items-center gap-2 rounded bg-[#0F766E] px-5 py-2 text-xs font-bold text-white shadow-sm hover:bg-[#115E59] disabled:opacity-60"
               >
-                <CheckCircle2 className="h-4 w-4" />
-                <span>Save Setup & Launch Pharmacy Dashboard</span>
+                {isSaving ? (
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>Save Setup & Launch Pharmacy Dashboard</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

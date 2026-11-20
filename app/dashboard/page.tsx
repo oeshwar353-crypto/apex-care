@@ -10,12 +10,10 @@ import {
   TrendingUp,
   Receipt,
   Plus,
-  ArrowUpRight,
-  ArrowDownRight,
   ShoppingBag,
-  ExternalLink,
-  Calendar,
+  CheckCircle2,
   X,
+  Radio,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -40,6 +38,7 @@ export default function DashboardPage() {
     batches,
     medicineSummaries,
     addBatch,
+    isRealtimeConnected,
   } = usePharmacy();
 
   const [timeFilter, setTimeFilter] = useState<"7d" | "30d" | "year">("7d");
@@ -53,81 +52,110 @@ export default function DashboardPage() {
     category: "Antibiotics" as MedicineCategory,
     manufacturer: "",
     batchNumber: "",
-    quantity: 60,
-    purchasePrice: 45,
-    sellingPrice: 70,
-    expiryDate: "2027-10-31",
-    reorderThreshold: 15,
+    quantity: 0,
+    purchasePrice: 0,
+    sellingPrice: 0,
+    expiryDate: "",
+    reorderThreshold: 10,
   });
 
-  // Calculate Sales Chart data based on invoices + mock trend
+  // Calculate REAL Sales Chart data strictly derived from real invoices
   const salesChartData = useMemo(() => {
-    if (timeFilter === "7d") {
-      return [
-        { label: "Mon", revenue: 4200, orders: 14 },
-        { label: "Tue", revenue: 5800, orders: 19 },
-        { label: "Wed", revenue: 3950, orders: 12 },
-        { label: "Thu", revenue: 7100, orders: 24 },
-        { label: "Fri", revenue: 6450, orders: 21 },
-        { label: "Sat", revenue: 8900, orders: 31 },
-        {
-          label: "Sun (Today)",
-          revenue: Math.max(kpiStats.todaySales, 3850),
-          orders: Math.max(kpiStats.todayInvoicesCount, 15),
-        },
-      ];
-    } else if (timeFilter === "30d") {
-      return [
-        { label: "Week 1", revenue: 34200, orders: 110 },
-        { label: "Week 2", revenue: 41800, orders: 135 },
-        { label: "Week 3", revenue: 38900, orders: 122 },
-        { label: "Week 4", revenue: 46500, orders: 154 },
-      ];
-    } else {
-      return [
-        { label: "May", revenue: 145000, orders: 480 },
-        { label: "Jun", revenue: 162000, orders: 530 },
-        { label: "Jul", revenue: 158000, orders: 510 },
-        { label: "Aug", revenue: 179000, orders: 590 },
-        { label: "Sep", revenue: 184000, orders: 620 },
-        { label: "Oct", revenue: 192000, orders: 640 },
-      ];
-    }
-  }, [timeFilter, kpiStats.todaySales, kpiStats.todayInvoicesCount]);
+    const now = new Date();
 
-  // Top selling medicines derived from invoices
+    if (timeFilter === "7d") {
+      const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const result = [];
+
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const dayStr = d.toISOString().slice(0, 10);
+        const dayName = days[d.getDay()];
+        const isToday = i === 0;
+
+        const dayInvoices = invoices.filter(
+          (inv) => inv.paymentStatus === "Completed" && inv.date.startsWith(dayStr)
+        );
+
+        const revenue = dayInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+        result.push({
+          label: isToday ? `${dayName} (Today)` : dayName,
+          revenue,
+          orders: dayInvoices.length,
+        });
+      }
+      return result;
+    } else if (timeFilter === "30d") {
+      // 4 week segments
+      const result = [];
+      for (let w = 4; w >= 1; w--) {
+        const startDay = new Date(now);
+        startDay.setDate(startDay.getDate() - w * 7);
+        const endDay = new Date(now);
+        endDay.setDate(endDay.getDate() - (w - 1) * 7);
+
+        const weekInvoices = invoices.filter((inv) => {
+          if (inv.paymentStatus !== "Completed") return false;
+          const invDate = new Date(inv.date);
+          return invDate >= startDay && invDate < endDay;
+        });
+
+        const revenue = weekInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+        result.push({
+          label: `Week ${5 - w}`,
+          revenue,
+          orders: weekInvoices.length,
+        });
+      }
+      return result;
+    } else {
+      // Last 6 calendar months
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const result = [];
+      for (let m = 5; m >= 0; m--) {
+        const target = new Date(now.getFullYear(), now.getMonth() - m, 1);
+        const monthKey = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, "0")}`;
+
+        const monthInvoices = invoices.filter(
+          (inv) => inv.paymentStatus === "Completed" && inv.date.startsWith(monthKey)
+        );
+
+        const revenue = monthInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+        result.push({
+          label: monthNames[target.getMonth()],
+          revenue,
+          orders: monthInvoices.length,
+        });
+      }
+      return result;
+    }
+  }, [timeFilter, invoices]);
+
+  // Top selling medicines derived STRICTLY from real user invoices
   const topSellingMedicines = useMemo(() => {
-    const map = new Map<string, { name: string; category: string; units: number; revenue: number }>();
+    const map = new Map<string, { name: string; units: number; revenue: number }>();
+
     invoices.forEach((inv) => {
       if (inv.paymentStatus === "Completed") {
         inv.items.forEach((item) => {
           const key = item.medicineName;
-          const current = map.get(key) || { name: key, category: "General", units: 0, revenue: 0 };
+          const cur = map.get(key) || { name: key, units: 0, revenue: 0 };
           map.set(key, {
             name: key,
-            category: "Pharma",
-            units: current.units + item.quantity,
-            revenue: current.revenue + item.total,
+            units: cur.units + item.quantity,
+            revenue: cur.revenue + item.total,
           });
         });
       }
     });
 
-    const list = Array.from(map.values());
-    if (list.length < 5) {
-      // Seed with realistic standard items if fresh store
-      return [
-        { name: "Dolo 650 Tablet", category: "Analgesics & Pain", units: 142, revenue: 4544 },
-        { name: "Augmentin 625 Duo", category: "Antibiotics", units: 68, revenue: 13702 },
-        { name: "Pan 40 Tablet", category: "Gastrointestinal", units: 94, revenue: 14570 },
-        { name: "Glycomet 500 SR", category: "Antidiabetics", units: 120, revenue: 5100 },
-        { name: "Montair LC", category: "Respiratory", units: 52, revenue: 11960 },
-      ];
-    }
-    return list.sort((a, b) => b.units - a.units).slice(0, 5);
+    return Array.from(map.values())
+      .sort((a, b) => b.units - a.units)
+      .slice(0, 5);
   }, [invoices]);
 
-  // Low stock items
+  // Low stock items based on actual batches
   const lowStockBatches = useMemo(() => {
     return batches
       .filter((b) => b.quantity <= b.reorderThreshold)
@@ -146,11 +174,11 @@ export default function DashboardPage() {
       .slice(0, 5);
   }, [batches]);
 
-  const handleCreateBatch = (e: React.FormEvent) => {
+  const handleCreateBatch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBatchData.medicineName || !newBatchData.batchNumber) return;
 
-    addBatch({
+    await addBatch({
       medicineId: `med-${Date.now()}`,
       medicineName: newBatchData.medicineName,
       genericName: newBatchData.genericName || newBatchData.medicineName,
@@ -171,11 +199,11 @@ export default function DashboardPage() {
       category: "Antibiotics",
       manufacturer: "",
       batchNumber: "",
-      quantity: 60,
-      purchasePrice: 45,
-      sellingPrice: 70,
-      expiryDate: "2027-10-31",
-      reorderThreshold: 15,
+      quantity: 0,
+      purchasePrice: 0,
+      sellingPrice: 0,
+      expiryDate: "",
+      reorderThreshold: 10,
     });
   };
 
@@ -185,9 +213,17 @@ export default function DashboardPage() {
         {/* Welcome & Quick Action Bar */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-4 shadow-sm">
           <div>
-            <h2 className="text-sm font-bold text-[#1F2937]">Store Summary & Real-Time Metrics</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold text-[#1F2937]">Store Summary & Real-Time Metrics</h2>
+              {isRealtimeConnected && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#F0FDF4] border border-[#BBF7D0] px-2 py-0.5 text-[10px] font-semibold text-[#15803D]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#15803D] animate-ping" />
+                  Live Sync Active
+                </span>
+              )}
+            </div>
             <p className="text-xs text-[#64748B]">
-              Terminal ready • Dispensing active • Local database synchronized
+              Real-time POS dispensing, cloud-synchronized inventory, and live transaction ledger
             </p>
           </div>
 
@@ -220,12 +256,15 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="mt-2 text-xl font-bold text-[#1F2937]">
-              {formatINR(kpiStats.todaySales || 1845.85)}
+              {formatINR(kpiStats.todaySales)}
             </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[#15803D]">
-              <TrendingUp className="h-3.5 w-3.5" />
-              <span className="font-semibold">+8.4%</span>
-              <span className="text-[#64748B]">vs yesterday ({kpiStats.todayInvoicesCount} bills)</span>
+            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-[#64748B]">
+              <TrendingUp className="h-3.5 w-3.5 text-[#0F766E]" />
+              <span>
+                {kpiStats.todayInvoicesCount === 0
+                  ? "No bills processed today"
+                  : `${kpiStats.todayInvoicesCount} bill${kpiStats.todayInvoicesCount > 1 ? "s" : ""} generated`}
+              </span>
             </div>
           </div>
 
@@ -238,7 +277,8 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="mt-2 text-xl font-bold text-[#1F2937]">
-              {medicineSummaries.length} <span className="text-xs font-normal text-[#64748B]">({batches.length} batches)</span>
+              {medicineSummaries.length}{" "}
+              <span className="text-xs font-normal text-[#64748B]">({batches.length} batches)</span>
             </div>
             <div className="mt-1 flex items-center gap-1 text-[11px] text-[#64748B]">
               <span>Active catalog in inventory</span>
@@ -273,7 +313,8 @@ export default function DashboardPage() {
               </div>
             </div>
             <div className="mt-2 text-xl font-bold text-[#B91C1C]">
-              {kpiStats.expiringBatchesCount + kpiStats.expiredBatchesCount} <span className="text-xs font-normal text-[#64748B]">batches</span>
+              {kpiStats.expiringBatchesCount + kpiStats.expiredBatchesCount}{" "}
+              <span className="text-xs font-normal text-[#64748B]">batches</span>
             </div>
             <div className="mt-1 flex items-center justify-between text-[11px]">
               <span className="text-[#64748B]">Within 90 days or expired</span>
@@ -290,8 +331,10 @@ export default function DashboardPage() {
           <div className="lg:col-span-2 rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-sm">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-[#E2E8F0] pb-3 mb-4 gap-2">
               <div>
-                <h3 className="text-xs font-bold text-[#1F2937]">Sales Revenue Performance</h3>
-                <p className="text-[11px] text-[#64748B]">Track revenue and dispensed transaction volume</p>
+                <h3 className="text-xs font-bold text-[#1F2937]">Real-Time Sales Revenue Performance</h3>
+                <p className="text-[11px] text-[#64748B]">
+                  Live transaction data generated from completed sales bills
+                </p>
               </div>
 
               {/* Chart Controls */}
@@ -338,17 +381,17 @@ export default function DashboardPage() {
                       timeFilter === "year" ? "bg-white text-[#0F766E] shadow-xs" : "text-[#64748B]"
                     }`}
                   >
-                    6 Months
+                    This Year
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* Recharts Component (Solid Colors only, NO gradients per guidelines) */}
+            {/* Render Recharts Chart */}
             <div className="h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 {chartType === "bar" ? (
-                  <BarChart data={salesChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <BarChart data={salesChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
                     <XAxis
                       dataKey="label"
@@ -373,10 +416,10 @@ export default function DashboardPage() {
                         fontSize: "12px",
                       }}
                     />
-                    <Bar dataKey="revenue" fill="#0F766E" radius={[2, 2, 0, 0]} maxBarSize={45} />
+                    <Bar dataKey="revenue" fill="#0F766E" radius={[4, 4, 0, 0]} maxBarSize={40} />
                   </BarChart>
                 ) : (
-                  <LineChart data={salesChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <LineChart data={salesChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
                     <XAxis
                       dataKey="label"
@@ -420,22 +463,30 @@ export default function DashboardPage() {
             <div>
               <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3 mb-3">
                 <h3 className="text-xs font-bold text-[#1F2937]">Top Selling Medicines</h3>
-                <span className="text-[10px] text-[#64748B]">By Units Dispensed</span>
+                <span className="text-[10px] text-[#64748B]">Real Sales</span>
               </div>
 
-              <div className="space-y-3">
-                {topSellingMedicines.map((med, idx) => (
-                  <div key={idx} className="flex items-center justify-between text-xs">
-                    <div className="min-w-0 pr-2">
-                      <div className="font-semibold text-[#1F2937] truncate">{med.name}</div>
-                      <div className="text-[10px] text-[#64748B]">{med.units} units sold</div>
+              {topSellingMedicines.length === 0 ? (
+                <div className="py-12 text-center text-xs text-[#94A3B8]">
+                  <ShoppingBag className="mx-auto mb-2 h-7 w-7 text-[#CBD5E1]" />
+                  No sales recorded yet.<br />
+                  Bills completed in POS will appear here live.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {topSellingMedicines.map((med, idx) => (
+                    <div key={idx} className="flex items-center justify-between text-xs">
+                      <div className="min-w-0 pr-2">
+                        <div className="font-semibold text-[#1F2937] truncate">{med.name}</div>
+                        <div className="text-[10px] text-[#64748B]">{med.units} units sold</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-semibold text-[#0F766E]">{formatINR(med.revenue)}</div>
+                      </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div className="font-semibold text-[#0F766E]">{formatINR(med.revenue)}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="mt-4 border-t border-[#E2E8F0] pt-3 text-center">
@@ -471,163 +522,146 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#F1F5F9]">
-                  {invoices.slice(0, 5).map((inv) => (
-                    <tr key={inv.id} className="hover:bg-[#F8FAFC]">
-                      <td className="py-2.5 px-2 font-mono text-[11px] text-[#0F766E] font-medium">
-                        {inv.invoiceNumber}
-                      </td>
-                      <td className="py-2.5 px-2">
-                        <div className="font-medium text-[#1F2937]">{inv.customerName}</div>
-                        <div className="text-[10px] text-[#64748B]">{inv.items.length} items</div>
-                      </td>
-                      <td className="py-2.5 px-2">
-                        <span className="rounded bg-[#F1F5F9] px-1.5 py-0.5 text-[10px] font-medium text-[#475569]">
-                          {inv.paymentMethod}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-2 text-right font-semibold text-[#1F2937]">
-                        {formatINR(inv.totalAmount)}
+                  {invoices.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-8 text-center text-xs text-[#94A3B8]">
+                        No billing transactions completed yet.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    invoices.slice(0, 5).map((inv) => (
+                      <tr key={inv.id} className="hover:bg-[#F8FAFC]">
+                        <td className="py-2.5 px-2 font-mono text-[11px] text-[#0F766E] font-medium">
+                          {inv.invoiceNumber}
+                        </td>
+                        <td className="py-2.5 px-2">
+                          <div className="font-medium text-[#1F2937]">{inv.customerName}</div>
+                          <div className="text-[10px] text-[#64748B]">{formatDate(inv.date)}</div>
+                        </td>
+                        <td className="py-2.5 px-2">
+                          <span className="rounded bg-[#F8FAFC] border border-[#E2E8F0] px-1.5 py-0.5 text-[10px] font-medium text-[#4B5563]">
+                            {inv.paymentMethod}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-semibold text-[#1F2937]">
+                          {formatINR(inv.totalAmount)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
 
-          {/* Actionable Alerts: Low Stock & Approaching Expiry */}
+          {/* Operational Alerts: Low Stock & Expiring Batches */}
           <div className="rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-sm">
             <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3 mb-3">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-[#B45309]" />
-                <h3 className="text-xs font-bold text-[#1F2937]">Inventory Alerts (Low Stock & Expiry)</h3>
+                <h3 className="text-xs font-bold text-[#1F2937]">Stock Level & Expiry Alerts</h3>
               </div>
               <Link href="/inventory" className="text-xs font-medium text-[#0F766E] hover:underline">
-                Manage All &rarr;
+                Manage Stock &rarr;
               </Link>
             </div>
 
-            <div className="space-y-2.5">
-              {/* Show Low Stock items */}
-              {lowStockBatches.length > 0 && (
-                <div>
-                  <div className="text-[11px] font-bold uppercase text-[#B45309] mb-1.5">
-                    Critical Low Stock:
+            <div className="space-y-4">
+              {/* Low Stock Subtable */}
+              <div>
+                <div className="text-[11px] font-semibold text-[#B45309] uppercase tracking-wider mb-1.5">
+                  Critical Low Stock ({lowStockBatches.length})
+                </div>
+                {lowStockBatches.length === 0 ? (
+                  <div className="rounded border border-[#BBF7D0] bg-[#F0FDF4] p-2.5 text-xs text-[#15803D] flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span>All medicine stock levels are currently healthy.</span>
                   </div>
-                  <div className="space-y-1.5">
-                    {lowStockBatches.slice(0, 3).map((b) => (
-                      <div
-                        key={b.id}
-                        className="flex items-center justify-between rounded border border-[#FEF3C7] bg-[#FFFBEB] p-2 text-xs"
-                      >
+                ) : (
+                  <div className="divide-y divide-[#F1F5F9] rounded border border-[#E2E8F0]">
+                    {lowStockBatches.map((b) => (
+                      <div key={b.id} className="flex items-center justify-between p-2 text-xs">
                         <div>
-                          <span className="font-semibold text-[#92400E]">{b.medicineName}</span>
-                          <span className="ml-1 text-[11px] text-[#B45309]">({b.batchNumber})</span>
+                          <div className="font-semibold text-[#1F2937]">{b.medicineName}</div>
+                          <div className="text-[10px] text-[#64748B]">Batch: {b.batchNumber}</div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="rounded bg-[#FDE68A] px-2 py-0.5 text-[11px] font-bold text-[#78350F]">
-                            {b.quantity} Left (Min {b.reorderThreshold})
-                          </span>
-                          <Link
-                            href="/inventory"
-                            className="text-[11px] font-medium text-[#0F766E] underline"
-                          >
-                            Restock
-                          </Link>
+                        <div className="text-right">
+                          <span className="font-bold text-[#B45309]">{b.quantity} left</span>
+                          <span className="text-[10px] text-[#64748B] block">Min: {b.reorderThreshold}</span>
                         </div>
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
-              {/* Show Expiring Batches */}
-              {expiringBatches.length > 0 && (
-                <div className="pt-2">
-                  <div className="text-[11px] font-bold uppercase text-[#B91C1C] mb-1.5">
-                    Expiring or Expired Batches:
-                  </div>
-                  <div className="space-y-1.5">
-                    {expiringBatches.slice(0, 3).map((b) => {
-                      const isExp = getExpiryStatus(b.expiryDate) === "expired";
-                      return (
-                        <div
-                          key={b.id}
-                          className={`flex items-center justify-between rounded border p-2 text-xs ${
-                            isExp
-                              ? "border-[#FCA5A5] bg-[#FEF2F2] text-[#991B1B]"
-                              : "border-[#FED7AA] bg-[#FFF7ED] text-[#9A3412]"
-                          }`}
-                        >
-                          <div>
-                            <span className="font-semibold">{b.medicineName}</span>
-                            <span className="ml-1 text-[10px]">Batch: {b.batchNumber}</span>
-                          </div>
-                          <div className="text-right">
-                            <span className="font-bold text-[11px]">
-                              {isExp ? "EXPIRED" : `Exp: ${b.expiryDate}`}
-                            </span>
-                            <div className="text-[10px]">{b.quantity} units</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+              {/* Expiring Soon Subtable */}
+              <div>
+                <div className="text-[11px] font-semibold text-[#B91C1C] uppercase tracking-wider mb-1.5">
+                  Expiring Within 90 Days ({expiringBatches.length})
                 </div>
-              )}
+                {expiringBatches.length === 0 ? (
+                  <div className="rounded border border-[#BBF7D0] bg-[#F0FDF4] p-2.5 text-xs text-[#15803D] flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    <span>No batches expiring soon.</span>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-[#F1F5F9] rounded border border-[#E2E8F0]">
+                    {expiringBatches.map((b) => (
+                      <div key={b.id} className="flex items-center justify-between p-2 text-xs">
+                        <div>
+                          <div className="font-semibold text-[#1F2937]">{b.medicineName}</div>
+                          <div className="text-[10px] text-[#64748B] font-mono">{b.batchNumber}</div>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-medium text-[#B91C1C]">{b.expiryDate}</span>
+                          <span className="text-[10px] text-[#64748B] block">{b.quantity} units</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Quick Add Batch Modal from Dashboard */}
+      {/* Add Batch Modal */}
       {isAddBatchOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+          <div className="w-full max-w-lg rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3 mb-4">
-              <h3 className="text-sm font-bold text-[#1F2937]">Receive Stock / Add Medicine Batch</h3>
+              <h3 className="text-sm font-bold text-[#1F2937]">Add Medicine Batch to Inventory</h3>
               <button
                 onClick={() => setIsAddBatchOpen(false)}
-                className="text-[#64748B] hover:text-[#1F2937]"
+                className="rounded p-1 text-[#64748B] hover:bg-[#F8FAFC]"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateBatch} className="space-y-3.5 text-xs">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-[#374151] mb-1">Medicine Brand Name *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Dolo 650"
-                    value={newBatchData.medicineName}
-                    onChange={(e) => setNewBatchData({ ...newBatchData, medicineName: e.target.value })}
-                    className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-[#374151] mb-1">Generic Name / Salt</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Paracetamol 650mg"
-                    value={newBatchData.genericName}
-                    onChange={(e) => setNewBatchData({ ...newBatchData, genericName: e.target.value })}
-                    className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
-                  />
-                </div>
+            <form onSubmit={handleCreateBatch} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-semibold text-[#374151] mb-1">Medicine Brand Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Paracetamol 500"
+                  value={newBatchData.medicineName}
+                  onChange={(e) => setNewBatchData({ ...newBatchData, medicineName: e.target.value })}
+                  className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
+                />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-[#374151] mb-1">Batch Number *</label>
+                  <label className="block font-semibold text-[#374151] mb-1">Generic / Chemical</label>
                   <input
                     type="text"
-                    required
-                    placeholder="e.g. DL-2024-909"
-                    value={newBatchData.batchNumber}
-                    onChange={(e) => setNewBatchData({ ...newBatchData, batchNumber: e.target.value })}
+                    placeholder="Composition"
+                    value={newBatchData.genericName}
+                    onChange={(e) => setNewBatchData({ ...newBatchData, genericName: e.target.value })}
                     className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
                   />
                 </div>
@@ -635,7 +669,7 @@ export default function DashboardPage() {
                   <label className="block font-semibold text-[#374151] mb-1">Manufacturer</label>
                   <input
                     type="text"
-                    placeholder="e.g. Micro Labs"
+                    placeholder="Pharma Brand"
                     value={newBatchData.manufacturer}
                     onChange={(e) => setNewBatchData({ ...newBatchData, manufacturer: e.target.value })}
                     className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
@@ -643,42 +677,18 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-[#374151] mb-1">Quantity *</label>
+                  <label className="block font-semibold text-[#374151] mb-1">Batch Number *</label>
                   <input
-                    type="number"
-                    min="1"
+                    type="text"
                     required
-                    value={newBatchData.quantity}
-                    onChange={(e) => setNewBatchData({ ...newBatchData, quantity: Number(e.target.value) })}
+                    placeholder="e.g. BT-2024-01"
+                    value={newBatchData.batchNumber}
+                    onChange={(e) => setNewBatchData({ ...newBatchData, batchNumber: e.target.value })}
                     className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
                   />
                 </div>
-                <div>
-                  <label className="block font-semibold text-[#374151] mb-1">Purchase Price (₹)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={newBatchData.purchasePrice}
-                    onChange={(e) => setNewBatchData({ ...newBatchData, purchasePrice: Number(e.target.value) })}
-                    className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-[#374151] mb-1">Selling Price (₹) *</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    required
-                    value={newBatchData.sellingPrice}
-                    onChange={(e) => setNewBatchData({ ...newBatchData, sellingPrice: Number(e.target.value) })}
-                    className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-[#374151] mb-1">Expiry Date *</label>
                   <input
@@ -689,23 +699,50 @@ export default function DashboardPage() {
                     className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
                   />
                 </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block font-semibold text-[#374151] mb-1">Reorder Threshold</label>
+                  <label className="block font-semibold text-[#374151] mb-1">Quantity *</label>
                   <input
                     type="number"
                     min="1"
-                    value={newBatchData.reorderThreshold}
-                    onChange={(e) => setNewBatchData({ ...newBatchData, reorderThreshold: Number(e.target.value) })}
+                    required
+                    value={newBatchData.quantity || ""}
+                    onChange={(e) => setNewBatchData({ ...newBatchData, quantity: Number(e.target.value) })}
+                    className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-[#374151] mb-1">Purchase (₹)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={newBatchData.purchasePrice || ""}
+                    onChange={(e) => setNewBatchData({ ...newBatchData, purchasePrice: Number(e.target.value) })}
+                    className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-[#374151] mb-1">MRP / Sell (₹) *</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="1"
+                    required
+                    value={newBatchData.sellingPrice || ""}
+                    onChange={(e) => setNewBatchData({ ...newBatchData, sellingPrice: Number(e.target.value) })}
                     className="w-full rounded border border-[#E2E8F0] px-3 py-2 outline-none focus:border-[#0F766E]"
                   />
                 </div>
               </div>
 
-              <div className="mt-5 flex justify-end gap-2 border-t border-[#E2E8F0] pt-4">
+              <div className="flex justify-end gap-2 pt-3 border-t border-[#E2E8F0]">
                 <button
                   type="button"
                   onClick={() => setIsAddBatchOpen(false)}
-                  className="rounded border border-[#E2E8F0] px-3.5 py-1.5 text-xs text-[#64748B] hover:bg-[#F8FAFC]"
+                  className="rounded border border-[#E2E8F0] px-3 py-1.5 text-xs text-[#64748B] hover:bg-[#F8FAFC]"
                 >
                   Cancel
                 </button>
@@ -713,7 +750,7 @@ export default function DashboardPage() {
                   type="submit"
                   className="rounded bg-[#0F766E] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#115E59]"
                 >
-                  Save & Add Batch
+                  Save Batch
                 </button>
               </div>
             </form>

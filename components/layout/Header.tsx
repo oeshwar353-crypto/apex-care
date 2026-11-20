@@ -6,8 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   Bell,
   Menu,
-  User,
-  Search,
   RotateCcw,
   LogOut,
   Sliders,
@@ -15,9 +13,11 @@ import {
   AlertTriangle,
   Receipt,
   Plus,
+  Cloud,
+  Radio,
 } from "lucide-react";
 import { usePharmacy } from "@/lib/pharmacy-context";
-import { formatINR } from "@/lib/calculations";
+import { useAuth } from "@/lib/auth-context";
 
 interface HeaderProps {
   pageTitle: string;
@@ -31,13 +31,20 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAddMedicine,
 }) => {
   const router = useRouter();
-  const { profile, settings, kpiStats, batches, resetToDemoData } = usePharmacy();
+  const { profile, settings, kpiStats, batches, resetToDemoData, isRealtimeConnected } = usePharmacy();
+  const { user, signOut, isConfigured } = useAuth();
+
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   const notifRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
+
+  const displayName = user?.displayName || profile.ownerName || settings.displayName;
+  const userEmail = user?.email || profile.email || settings.email;
+  const userRole = user?.role || settings.role;
+  const isDemo = user?.isDemo ?? true;
 
   // Close dropdowns on click outside
   useEffect(() => {
@@ -64,10 +71,16 @@ export const Header: React.FC<HeaderProps> = ({
     return diff <= 90;
   });
 
+  const handleSignOut = async () => {
+    setUserMenuOpen(false);
+    await signOut();
+    router.push("/login");
+  };
+
   return (
     <>
       <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E2E8F0] bg-[#FFFFFF] px-4 sm:px-6">
-        {/* Left side: Hamburger (mobile) + Page Title */}
+        {/* Left side: Hamburger (mobile) + Page Title + Realtime status */}
         <div className="flex items-center gap-3">
           <button
             onClick={onOpenMobileNav}
@@ -84,9 +97,19 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden sm:inline-flex items-center rounded border border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-[11px] font-medium text-[#64748B]">
                 {profile.city.split(",")[0] || "Store Front"}
               </span>
+              {isRealtimeConnected ? (
+                <span className="hidden md:inline-flex items-center gap-1 rounded-full bg-[#F0FDF4] border border-[#BBF7D0] px-2 py-0.5 text-[10px] font-semibold text-[#15803D]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#15803D] animate-ping" />
+                  Live Sync
+                </span>
+              ) : isConfigured && !isDemo ? (
+                <span className="hidden md:inline-flex items-center gap-1 rounded bg-[#F0FDF4] border border-[#BBF7D0] px-1.5 py-0.5 text-[10px] font-semibold text-[#15803D]">
+                  <Cloud className="h-3 w-3" /> Supabase
+                </span>
+              ) : null}
             </div>
             <p className="hidden md:block text-[11px] text-[#64748B] mt-0.5">
-              Logged in as <span className="font-semibold text-[#1F2937]">{settings.displayName}</span> ({settings.role})
+              Logged in as <span className="font-semibold text-[#1F2937]">{displayName}</span> ({userRole})
             </p>
           </div>
         </div>
@@ -194,20 +217,31 @@ export const Header: React.FC<HeaderProps> = ({
               className="flex items-center gap-2 rounded-md border border-[#E2E8F0] bg-[#FFFFFF] px-2.5 py-1.5 text-xs text-[#1F2937] hover:bg-[#F8FAFC]"
             >
               <div className="flex h-6 w-6 items-center justify-center rounded bg-[#F0FDFA] text-[#0F766E] font-bold text-xs">
-                {settings.displayName.charAt(0) || "U"}
+                {displayName.charAt(0) || "U"}
               </div>
               <span className="hidden sm:inline font-medium text-xs max-w-[120px] truncate">
-                {settings.displayName}
+                {displayName}
               </span>
             </button>
 
             {userMenuOpen && (
-              <div className="absolute right-0 mt-2 w-56 rounded-md border border-[#E2E8F0] bg-[#FFFFFF] shadow-md z-50 py-1">
+              <div className="absolute right-0 mt-2 w-64 rounded-md border border-[#E2E8F0] bg-[#FFFFFF] shadow-md z-50 py-1">
                 <div className="border-b border-[#E2E8F0] px-3.5 py-2.5">
-                  <div className="text-xs font-bold text-[#1F2937] truncate">{settings.displayName}</div>
-                  <div className="text-[11px] text-[#64748B] truncate">{settings.email}</div>
-                  <div className="mt-1 inline-block rounded bg-[#F0FDFA] px-1.5 py-0.5 text-[10px] font-semibold text-[#0F766E]">
-                    {settings.role}
+                  <div className="text-xs font-bold text-[#1F2937] truncate">{displayName}</div>
+                  <div className="text-[11px] text-[#64748B] truncate">{userEmail}</div>
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <span className="inline-block rounded bg-[#F0FDFA] px-1.5 py-0.5 text-[10px] font-semibold text-[#0F766E]">
+                      {userRole}
+                    </span>
+                    {isConfigured && !isDemo ? (
+                      <span className="inline-block rounded bg-[#F0FDF4] px-1.5 py-0.5 text-[10px] font-semibold text-[#15803D]">
+                        Supabase Cloud
+                      </span>
+                    ) : (
+                      <span className="inline-block rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[10px] font-semibold text-[#B45309]">
+                        Demo Terminal
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -234,10 +268,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <div className="border-t border-[#E2E8F0] my-1"></div>
 
                 <button
-                  onClick={() => {
-                    setUserMenuOpen(false);
-                    router.push("/login");
-                  }}
+                  onClick={handleSignOut}
                   className="w-full flex items-center gap-2 px-3.5 py-2 text-left text-xs text-[#B91C1C] hover:bg-[#FEE2E2]"
                 >
                   <LogOut className="h-3.5 w-3.5" />
@@ -255,7 +286,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="w-full max-w-sm rounded-md border border-[#E2E8F0] bg-[#FFFFFF] p-5 shadow-lg">
             <h3 className="text-sm font-bold text-[#1F2937]">Reset Demo Store Data?</h3>
             <p className="mt-2 text-xs text-[#64748B] leading-relaxed">
-              This will reset all medicines, batches, bills, invoices, and settings back to the default initial mock state. Any simulated sales or inventory changes will be cleared.
+              This will reset all medicines, batches, bills, invoices, and settings back to the default initial state.
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button

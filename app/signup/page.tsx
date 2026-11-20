@@ -3,29 +3,36 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Pill, ShieldCheck, ArrowRight, AlertCircle, Info } from "lucide-react";
+import { Pill, ArrowRight, AlertCircle, Info, CloudLightning, Database, CheckCircle2 } from "lucide-react";
 import { validateSignupForm } from "@/lib/validation";
 import { usePharmacy } from "@/lib/pharmacy-context";
+import { useAuth } from "@/lib/auth-context";
 
 export default function SignupPage() {
   const router = useRouter();
   const { updateProfile } = usePharmacy();
+  const { signUp, isConfigured } = useAuth();
 
   const [formData, setFormData] = useState({
-    pharmacyName: "HealthPlus Meds & Wellness",
-    ownerName: "Dr. Anjali Verma",
-    email: "contact@healthplus.demo",
-    licenseNumber: "DL-KA-2024-99120B",
-    password: "securepassword123",
-    confirmPassword: "securepassword123",
-    termsAccepted: true,
+    pharmacyName: "",
+    ownerName: "",
+    email: "",
+    licenseNumber: "",
+    password: "",
+    confirmPassword: "",
+    termsAccepted: false,
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [successInfo, setSuccessInfo] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitError(null);
+    setSuccessInfo(null);
+
     const result = validateSignupForm(formData);
     if (!result.isValid) {
       setErrors(result.errors);
@@ -34,18 +41,35 @@ export default function SignupPage() {
     setErrors({});
     setIsLoading(true);
 
-    setTimeout(() => {
+    try {
+      const res = await signUp({
+        email: formData.email,
+        password: formData.password,
+        pharmacyName: formData.pharmacyName,
+        ownerName: formData.ownerName,
+        licenseNumber: formData.licenseNumber,
+      });
+
+      if (!res.success) {
+        setSubmitError(res.error || "Failed to create account.");
+        setIsLoading(false);
+        return;
+      }
+
       // Update store profile with newly registered store information
-      updateProfile({
+      await updateProfile({
         name: formData.pharmacyName,
         ownerName: formData.ownerName,
         email: formData.email,
-        licenseNumber: `${formData.licenseNumber} (Demo)`,
+        licenseNumber: formData.licenseNumber,
       });
-      setIsLoading(false);
-      // Route to onboarding wizard to setup store profile and initial stock!
+
+      // Directly proceed to store onboarding wizard
       router.push("/onboarding");
-    }, 600);
+    } catch (err: any) {
+      setSubmitError(err.message || "An unexpected error occurred.");
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -59,28 +83,73 @@ export default function SignupPage() {
             &larr; Back to Home Page
           </Link>
         </div>
+
         {/* Brand Header */}
         <div className="mb-6 text-center">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-lg bg-[#0F766E] text-white">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-lg bg-[#0F766E] text-white shadow-sm">
             <Pill className="h-6 w-6" />
           </div>
           <h1 className="mt-3 text-xl font-bold tracking-tight text-[#1F2937]">
-            Create Pharmacy Terminal Account
+            Register Pharmacy Terminal
           </h1>
           <p className="text-xs text-[#64748B]">
-            Register your retail drug store or clinic dispensary
+            Create your account powered by Supabase Authentication
           </p>
         </div>
 
-        {/* Demo Notice */}
-        <div className="mb-4 rounded-md border border-[#E2E8F0] bg-[#FFFFFF] p-3 text-xs text-[#64748B]">
+        {/* Supabase status notice */}
+        <div
+          className={`mb-4 rounded-md border p-3 text-xs ${
+            isConfigured
+              ? "border-[#BBF7D0] bg-[#F0FDF4] text-[#15803D]"
+              : "border-[#E2E8F0] bg-[#FFFFFF] text-[#64748B]"
+          }`}
+        >
           <div className="flex items-start gap-2">
-            <Info className="h-4 w-4 shrink-0 text-[#0F766E] mt-0.5" />
+            {isConfigured ? (
+              <CloudLightning className="h-4 w-4 shrink-0 text-[#15803D] mt-0.5" />
+            ) : (
+              <Database className="h-4 w-4 shrink-0 text-[#0F766E] mt-0.5" />
+            )}
             <div>
-              <span className="font-semibold text-[#1F2937]">Demo Registration:</span> License and credentials are processed locally in your browser session for testing workflows.
+              {isConfigured ? (
+                <div>
+                  <span className="font-semibold text-[#15803D]">Supabase Connected:</span> Registration creates a verified user profile in your Supabase Auth user table.
+                </div>
+              ) : (
+                <div>
+                  <span className="font-semibold text-[#1F2937]">Demo / Setup Mode:</span> Supabase keys not set yet in <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px]">.env.local</code>. Registrations proceed locally so you can test all features immediately.
+                </div>
+              )}
             </div>
           </div>
         </div>
+
+        {submitError && (
+          <div className="mb-4 flex items-center gap-2 rounded-md border border-[#FECACA] bg-[#FEF2F2] p-3 text-xs text-[#B91C1C]">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{submitError}</span>
+          </div>
+        )}
+
+        {successInfo && (
+          <div className="mb-4 rounded-md border border-[#BBF7D0] bg-[#F0FDF4] p-4 text-xs text-[#15803D]">
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">{successInfo}</p>
+                <div className="mt-3">
+                  <Link
+                    href="/login"
+                    className="inline-flex items-center gap-1 font-semibold text-[#0F766E] underline"
+                  >
+                    Go to Sign In &rarr;
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Form Card */}
         <div className="rounded-lg border border-[#E2E8F0] bg-[#FFFFFF] p-6 shadow-sm">
@@ -215,7 +284,7 @@ export default function SignupPage() {
                   className="mt-0.5 h-3.5 w-3.5 rounded border-[#CBD5E1] text-[#0F766E] focus:ring-[#0F766E]"
                 />
                 <span>
-                  I agree to standard pharmacy drug dispensing standards, record retention guidelines, and simulated demo terms.
+                  I agree to standard pharmacy drug dispensing standards, record retention guidelines, and terms of service.
                 </span>
               </label>
               {errors.termsAccepted && (
@@ -233,7 +302,7 @@ export default function SignupPage() {
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
               ) : (
                 <>
-                  <span>Create Account & Setup Pharmacy</span>
+                  <span>Create Account & Continue</span>
                   <ArrowRight className="h-3.5 w-3.5" />
                 </>
               )}
